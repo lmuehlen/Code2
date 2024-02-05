@@ -1,0 +1,472 @@
+---
+title: "Untitled"
+author: "lmuehlen"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Packages
+```{r}
+
+library(DataExplorer)
+library(showtext)
+library(ggbeeswarm)
+library(countrycode)
+library(ggthemes)
+library(devtools)
+library(fixest)
+library(plm)
+library(readxl)
+library(countrycode)
+library(tidyverse)
+library(parsec)
+library(OECD)
+library(haven)
+library(rdbnomics)
+#library(lpdid)
+source("Functions/lpdid.R")
+source("Functions/get_poset_fiscalrules.R")
+source("Functions/plot_lpdid.R")
+
+
+font_add("lmroman",regular="C:/Users/leona/AppData/Local/Microsoft/Windows/Fonts/lmroman10-regular.otf") 
+showtext_auto()
+```
+
+# Fiscal rule index
+
+## Import data
+
+```{r warning=FALSE}
+imffr<-read_excel("Data/imf_fiscalrule_prepared.xlsx")%>%
+  mutate(countrycode=countrycode(countryname,"country.name","iso3c",custom_match = c("Kosovo"="XXK")))%>%
+  select(countrycode,everything())
+
+```
+
+## Index creation
+
+First, I build a fiscal rules stringency index based on partially ordered set theory (POSET). For this, I use the parsec library. The four properties underlying the index of fiscal rules are defined as follows:
+
+| Variable | Property           | Meaning values                                                                                                                        |
+|:-------------|:------------------|:--------------------------------------|
+| C1       | Monitoring         | 2= monitoring <br> 1=no monitoring <br> 0= no rule                                                                                    |
+| C2       | Formal enforcement | 2 = formal enforcement procedures <br>1 = no formal enforcement procedures <br>0 = no rule                                            |
+| C3       | Coverage           | 3 =general government<br>2 = general government (sim. rules other levels)<br>1 = central government <br> 0=no rule                    |
+| C4       | legal basis        | 4= constitutional/international treaty <br> 3 = statutory basis<br>2 = coalition agreement<br>1 = political commitment <br> 0=no rule |
+
+Note: We compute the indices of national and supranational fiscal rules separately and for the legal basis constitutional (5) is only for the national and international treaty (4) only for the supranational, therefore we redefine constitutional as 4.
+
+## Data preparation
+
+```{r}
+imffr2<-imffr%>%
+  select(matches("index"),countrycode,countryname,year)%>%
+  pivot_longer(-c(countrycode,countryname,year),names_pattern = "index_(.*)_(.*)_(.*)",names_to = c("dimension","level","ruletype"),values_to = "values")%>%
+  pivot_wider(names_from = dimension,values_from = values)%>%
+  mutate(monitoring=case_when(
+                              monitoring==1~2,
+                              monitoring==0~1,
+                              TRUE~0),
+         formalenforcement=case_when(
+                              formalenforcement==1~2,
+                              formalenforcement==0~1,
+                              TRUE~0),
+         legalbasis=case_when(
+                              legalbasis==5~4,
+                              is.na(legalbasis)~0,
+                              TRUE~legalbasis),
+         coverage=case_when(
+                              coverage==2~3,
+                              coverage==1.5~2,
+                              coverage==1~1,
+                              TRUE~0
+         )
+         )
+
+
+index_variables<-list(
+  monitoring=c(0,1,2),
+  formalenforcement=c(0,1,2),
+  legalbasis=c(0,1,2,3,4),
+  coverage=c(0,1,2,3)
+)
+
+
+
+index1<-get_poset_fiscalrules(imffr2,index_variables)
+
+ddpcr::quiet(
+index2<-index1%>%summary()%>%select(monitoring,formalenforcement,legalbasis,coverage,av_rank=`average rank`)
+)
+
+
+
+imffr3<-left_join(imffr2,index2,by=c("monitoring","formalenforcement","legalbasis","coverage"))%>%
+  mutate(frsi=10*(max(av_rank)-av_rank)/(max(av_rank)-min(av_rank)))%>%
+  select(1:5,11)%>%
+  pivot_wider(names_from =c(level,ruletype),values_from = frsi,names_prefix = "frsi_" )
+  
+saveRDS(imffr3,"dfs/imffr3")
+
+
+
+eval<-imffr3%>%
+  select(matches("_national_"))%>%
+  pop2prof()%>%
+  evaluation(threshold = "0000", error = 10^(-3))
+
+saveRDS(eval,"dfs/eval")
+
+eval<-readRDS("dfs/eval")
+s_eval<-eval%>%summary()%>%select(matches("frsi"),"frsi_national_full"="average rank")%>%mutate(frsi_national_full=10*(max(frsi_national_full)-frsi_national_full)/(max(frsi_national_full)-min(frsi_national_full)))
+
+imffr4<-left_join(imffr3,s_eval,by=c("frsi_national_er","frsi_national_rr","frsi_national_bbr","frsi_national_dr"))
+
+
+eval2<-imffr3%>%
+  select(matches("_supranational_"))%>%
+  pop2prof()%>%
+  evaluation(threshold = "0000", error = 10^(-3))
+
+saveRDS(eval2,"dfs/eval2")
+
+eval2<-readRDS("dfs/eval2")
+s_eval2<-eval2%>%summary()%>%select(matches("frsi"),"frsi_supranational_full"="average rank")%>%mutate(frsi_supranational_full=10*(max(frsi_supranational_full)-frsi_supranational_full)/(max(frsi_supranational_full)-min(frsi_supranational_full)))
+
+frsi<-left_join(imffr4,s_eval2,by=c("frsi_supranational_er","frsi_supranational_rr","frsi_supranational_bbr","frsi_supranational_dr"))
+saveRDS(frsi,"dfs/frsi")
+
+frsi<-readRDS("dfs/frsi")%>%mutate(region=countrycode(countrycode,"iso3c","un.region.name",custom_match = c("XXK"="Europe")))
+```
+
+## Dependent variable
+
+# Import and prepare Data
+
+PSCG= Gross capital
+
+```{r}
+data_cofog<-read_delim("Data/Cofog1985.csv",delim=";")%>%
+  select(countrycode=LOCATION,tran=TRANSACT,fun=Function,year=Year,value=Value)%>%
+  filter(tran%in%c("TLYCG","P5CG"))%>%
+  mutate(region=countrycode(countrycode,"iso3c","un.region.name"))%>%
+  pivot_wider(names_from = tran,values_from = value)%>%
+  mutate(ratio_inv_exp=100*P5CG/TLYCG)%>%
+ # select(-c(P5CG,TLYCG))%>%
+  filter(fun=="Total function",year>=1995)
+```
+
+## Controls
+### Database of Political Institutions
+
+```{r,eval=FALSE}
+data_dpi<-read_dta("Data/DPI2020.dta")%>%
+  dplyr::select(countrycode=ifs,year,system,execrlc,gov1vote,gov1rlc,gov2vote,gov2rlc,
+                gov3vote,gov3rlc,govothvt,opp1vote,opp1rlc,opp2vote,opp3vote,oppothvt,
+                legelec,exelec,liec,eiec,pluralty,pr,auton,muni,state,author,maj,herfgov,
+                herfopp,frac,oppfrac,govfrac,tensys,checks,stabs,polariz)%>%
+  #replacing -999 with NA
+  mutate(across(where(is.numeric),~as.numeric(.),.names = "{.col}"),#unfortunately is necessary for case_when but deletes labels from stata 
+         across(where(is.numeric), ~case_when(.==-999~NA_real_,
+                                       TRUE~.),.names = "{.col}"),
+         across(where(is.character),~as.character(.),.names = "{.col}"),#unfortunately is necessary for case_when but deletes labels from stata 
+         across(where(is.character), ~case_when(.=="-999"~NA_character_,
+                                              TRUE~.),.names = "{.col}"))%>%
+  rename_with(~gsub("(.*)","control_\\1",.)%>%tolower(),-c(countrycode,year))%>%
+  select(countrycode,year,control_legelec,control_exelec,control_auton,control_state,control_govfrac,control_author)
+
+
+
+saveRDS(dpi,"dfs/dpi")
+data_dpi<-readRDS("dfs/dpi")
+```
+
+### AMECO (European Comission)
+UDGGL= Debt GG (Percentage of GDP at current prices (excessive deficit procedure))
+UVGD= GDP current prices (Mrd ECU/EUR)
+AVGDGP= output gap (Percentage of potential gross domestic product at constant prices)
+UYIG= interest: general government (Percentage of GDP at current prices (excessive deficit procedure))
+UBLGI= net deficit excluding interest (Percentage of GDP at current prices (excessive deficit procedure))
+```{r}
+series<-c("UDGGL","UVGD","AVGDGP","UYIG","UBLGI")
+api_link<-paste0("https://api.db.nomics.world/v22/series/AMECO/",series,"?observations=1")
+
+data_ameco<-lapply(api_link,function(x){
+  rdb(api_link = x) 
+})%>%do.call("rbind",.)%>%
+  filter(
+         (dataset_code=="UDGGL"&Unit=="(Percentage of GDP at current prices (excessive deficit procedure))")|
+           (dataset_code=="UVGD"&Unit=="Mrd ECU/EUR")|
+           (dataset_code=="AVGDGP"&Unit=="(Percentage of potential gross domestic product at constant prices)")|
+           (dataset_code=="UYIG"&Unit=="(Percentage of GDP at current prices (excessive deficit procedure))")|
+           (dataset_code=="UBLGI"&Unit=="(Percentage of GDP at current prices (excessive deficit procedure))")
+         
+         )%>%
+  select(countrycode=geo,country=Country,variable=dataset_code,year=original_period,value)%>%
+  mutate(countrycode=countrycode(countrycode,"iso3c","iso3c",custom_match = c("ROM"="ROU")),year=as.numeric(year))%>%
+  filter(!is.na(countrycode))%>%
+  pivot_wider(c(countrycode,country,year),names_from = variable,names_prefix = "control_",values_from = value)
+```
+
+
+```{r}
+data<-left_join(cofog2,frsi,by=c("countrycode","year","region"))%>%
+  left_join(data_ameco,by=c("countrycode","year","countryname"="country"))%>%
+  left_join(data_dpi,by=c("countrycode","year"))%>%
+ # filter(year%in%1995:2021,region=="Europe")%>%
+  mutate(log_exp=log(TLYCG),
+         log_inv=log(P5CG))
+```
+
+# Regressions
+
+## full
+```{r}
+
+
+
+reg_full_ratio<-lpdid(data, window = c(-5,7),
+             y="ratio_inv_exp",
+             exp_var = "frsi_national_full",
+            controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+reg_full_exp<-lpdid(data, window = c(-5,6),
+             y="log_exp",
+             exp_var = "frsi_national_full",
+              controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+
+
+reg_full_inv<-lpdid(data, window = c(-5,6),
+             y="log_inv",
+             exp_var = "frsi_national_full",
+             controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+
+vis_reg_full_ratio<-reg_full_ratio%>%plot_lpdid()
+vis_reg_full_ratio
+ggsave("vis_reg_full_ratio.pdf", vis_reg_full_ratio, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+
+vis_reg_full_exp<-reg_full_exp%>%plot_lpdid()
+vis_reg_full_exp
+ggsave("vis_reg_full_exp.pdf", vis_reg_full_exp, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+vis_reg_full_inv<-reg_full_inv%>%plot_lpdid()
+vis_reg_full_inv
+ggsave("vis_reg_full_inv.pdf", vis_reg_full_inv, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+
+
+
+```
+
+## BBR
+```{r}
+
+reg_bbr_ratio<-lpdid(data, window = c(-5,7),
+             y="ratio_inv_exp",
+             exp_var = "frsi_national_bbr",
+            controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+reg_bbr_exp<-lpdid(data, window = c(-5,7),
+             y="log_exp",
+             exp_var = "frsi_national_bbr",
+              controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+
+
+reg_bbr_inv<-lpdid(data, window = c(-5,7),
+             y="log_inv",
+             exp_var = "frsi_national_bbr",
+             controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+
+vis_reg_bbr_ratio<-reg_bbr_ratio%>%plot_lpdid()
+vis_reg_bbr_ratio
+ggsave("vis_reg_bbr_ratio.pdf", vis_reg_bbr_ratio, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+vis_reg_bbr_exp<-reg_bbr_exp%>%plot_lpdid()
+vis_reg_bbr_exp
+ggsave("vis_reg_bbr_exp.pdf", vis_reg_bbr_exp, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+vis_reg_bbr_inv<-reg_bbr_inv%>%plot_lpdid()
+vis_reg_bbr_inv
+ggsave("vis_reg_bbr_inv.pdf", vis_reg_bbr_inv, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+
+```
+
+## DR
+```{r}
+
+
+reg_dr_ratio<-lpdid(data, window = c(-5,7),
+             y="ratio_inv_exp",
+             exp_var = "frsi_national_dr",
+            controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+reg_dr_exp<-lpdid(data, window = c(-5,7),
+             y="log_exp",
+             exp_var = "frsi_national_dr",
+              controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+reg_dr_inv<-lpdid(data, window = c(-5,7),
+             y="log_inv",
+             exp_var = "frsi_national_dr",
+             controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+
+vis_reg_dr_ratio<-reg_dr_ratio%>%plot_lpdid()
+vis_reg_dr_ratio
+ggsave("vis_reg_dr_ratio.pdf", vis_reg_dr_ratio, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+vis_reg_dr_exp<-reg_dr_exp%>%plot_lpdid()
+vis_reg_dr_exp
+ggsave("vis_reg_dr_exp.pdf", vis_reg_dr_exp, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+vis_reg_dr_inv<-reg_dr_inv%>%plot_lpdid()
+vis_reg_dr_inv
+ggsave("vis_reg_dr_inv.pdf", vis_reg_dr_inv, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+```
+
+## ER
+```{r}
+
+
+reg_er_ratio<-lpdid(data, window = c(-5,7),
+             y="ratio_inv_exp",
+             exp_var = "frsi_national_er",
+            controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+
+
+
+
+
+reg_er_exp<-lpdid(data, window = c(-5,7),
+             y="log_exp",
+             exp_var = "frsi_national_er",
+              controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+
+
+reg_er_inv<-lpdid(data, window = c(-5,7),
+             y="log_inv",
+             exp_var = "frsi_national_er",
+             controls = c("control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec"),
+             unit_index = "countrycode",
+             time_index = "year",
+             outcome_lags = 4,
+             reweight = FALSE,
+             nonabsorbing = TRUE,
+             nonabsorbing_lag = 3)
+
+
+vis_reg_er_ratio<-reg_er_ratio%>%plot_lpdid()
+vis_reg_er_ratio
+ggsave("vis_reg_er_ratio.pdf", vis_reg_er_ratio, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+vis_reg_er_exp<-reg_er_exp%>%plot_lpdid()
+vis_reg_er_exp
+ggsave("vis_reg_er_exp.pdf", vis_reg_er_exp, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+vis_reg_er_inv<-reg_er_inv%>%plot_lpdid()
+vis_reg_er_inv
+ggsave("vis_reg_er_inv.pdf", vis_reg_er_inv, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+
+```
+
+
+
+# Archiv
+
+## Dependent var alternative
+```{r}
+data_cofog<-rdb("Eurostat","gov_10a_exp",mask = "A...GF01.P51G+TE.")%>%
+  select(countrycode=geo,country=`Geopolitical entity (reporting)`,year=original_period,sector,indicator=na_item,unit,value)%>%
+  filter(!countrycode%in%c("EA19", "EA20", "EU27_2020"))%>%
+  mutate(indicator=case_when(indicator=="TE"~"expenditure",
+                             TRUE~"investment"),
+         year=as.numeric(year),countrycode=countrycode(countrycode,origin="eurostat",destination="iso3c"),
+         unit=str_replace_all(unit, "_", "") %>% 
+                           str_to_lower())%>%
+  pivot_wider(c(countrycode,country,year),names_from = c(indicator,sector,unit),names_prefix = "depvar_", values_from = value)
+
+saveRDS(data_cofog,"dfs/cofog")
+data_cofog<-readRDS("dfs/cofog")
+```
