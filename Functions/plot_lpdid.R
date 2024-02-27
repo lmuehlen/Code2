@@ -1,4 +1,4 @@
-plot_lpdid<-function (reg, conf = 0.95, segments = TRUE, add = FALSE, xlab = NULL, 
+plot_lpdid<-function (reg, conf = 0.9, segments = TRUE, add = FALSE, xlab = NULL, 
           ylab = NULL, main = "", x.shift = 0, pch = 19, cex = 1, 
           col = "black", opacity = 1) 
 {

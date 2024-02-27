@@ -158,7 +158,7 @@ for(j in 0:loop_bound){
 
 
     # Estimate
-        suppressMessages(tmp <- feols(frmla, data = df[lim,], cluster = ~cluster_var, weights = ~reweight_0))
+        suppressMessages(tmp <- feols(frmla, data = df[lim,],vcov = DK~rel_time, weights = ~reweight_0, panel.id = ~countrycode+rel_time))
         lpdid_betaz[match(-j, -pre_window:post_window)] <- tmp$coeftable[1,1]
         lpdid_sez[match(-j, -pre_window:post_window)] <- tmp$coeftable[1,2]
         lpdid_nz[match(-j, -pre_window:post_window)] <- nobs(tmp)
