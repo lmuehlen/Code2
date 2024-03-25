@@ -1,5 +1,5 @@
 ---
-title: "Untitled"
+title: ""
 author: "lmuehlen"
 date: "`r Sys.Date()`"
 output: html_document
@@ -31,17 +31,39 @@ library(OECD)
 library(haven)
 library(rdbnomics)
 library(usethis)
+library(patchwork)
+library(scales)
+library(psych)
+library(reporttools)
+library(devtools)
+library(data.table)
+library(sf)
+library(eurostat)
+library(imf.data)
 
-usethis::use_github()
+
+
+devtools::source_gist("c4d1089a501d3567be9fb784b1c5a6ab") 
+#loads functions of Sebastian Daza for creating descriptive tables
+
+#usethis::use_github()
 #library(lpdid)
 source("Functions/lpdid.R")
 source("Functions/get_poset_fiscalrules.R")
 source("Functions/plot_lpdid.R")
+source("Functions/save_vis.R")
+```
 
 
+Must be changed!!
+```{r}
 font_add("lmroman",regular="C:/Users/leona/AppData/Local/Microsoft/Windows/Fonts/lmroman10-regular.otf") 
 showtext_auto()
+
+
+f_graphics<-"C:/Users/leona/Dropbox/Apps/Overleaf/Fiscal Rules Budget Composition/Graphics"
 ```
+
 
 # Fiscal rule index
 
@@ -66,8 +88,6 @@ First, I build a fiscal rules stringency index based on partially ordered set th
 | C4       | legal basis        | 4= constitutional/international treaty <br> 3 = statutory basis<br>2 = coalition agreement<br>1 = political commitment <br> 0=no rule |
 
 Note: We compute the indices of national and supranational fiscal rules separately and for the legal basis constitutional (5) is only for the national and international treaty (4) only for the supranational, therefore we redefine constitutional as 4.
-
-## Data preparation
 
 ```{r eval=FALSE, include=FALSE}
 imffr2<-imffr%>%
@@ -102,15 +122,11 @@ index_variables<-list(
   coverage=c(0,1,2,3)
 )
 
-
-
 index1<-get_poset_fiscalrules(imffr2,index_variables)
 
 ddpcr::quiet(
 index2<-index1%>%summary()%>%select(monitoring,formalenforcement,legalbasis,coverage,av_rank=`average rank`)
 )
-
-
 
 imffr3<-left_join(imffr2,index2,by=c("monitoring","formalenforcement","legalbasis","coverage"))%>%
   mutate(frsi=10*(max(av_rank)-av_rank)/(max(av_rank)-min(av_rank)))%>%
@@ -118,8 +134,6 @@ imffr3<-left_join(imffr2,index2,by=c("monitoring","formalenforcement","legalbasi
   pivot_wider(names_from =c(level,ruletype),values_from = frsi,names_prefix = "frsi_" )
   
 saveRDS(imffr3,"dfs/imffr3")
-
-
 
 eval<-imffr3%>%
   select(matches("_national_"))%>%
@@ -132,7 +146,6 @@ eval<-readRDS("dfs/eval")
 s_eval<-eval%>%summary()%>%select(matches("frsi"),"frsi_national_full"="average rank")%>%mutate(frsi_national_full=10*(max(frsi_national_full)-frsi_national_full)/(max(frsi_national_full)-min(frsi_national_full)))
 
 imffr4<-left_join(imffr3,s_eval,by=c("frsi_national_er","frsi_national_rr","frsi_national_bbr","frsi_national_dr"))
-
 
 eval2<-imffr3%>%
   select(matches("_supranational_"))%>%
@@ -150,50 +163,44 @@ saveRDS(frsi,"dfs/frsi")
 frsi<-readRDS("dfs/frsi")%>%mutate(region=countrycode(countrycode,"iso3c","un.region.name",custom_match = c("XXK"="Europe")))
 ```
 
-## Dependent variable
-
-# Import and prepare Data
-
-PSCG= Gross capital
-
+# Dependent variable
 ```{r eval=FALSE, include=FALSE}
 data_cofog<-read_delim("Data/Cofog1985.csv",delim=";")%>%
   select(countrycode=LOCATION,tran=TRANSACT,fun=Function,year=Year,value=Value)%>%
   filter(tran%in%c("TLYCG","P5CG"))%>%
   mutate(region=countrycode(countrycode,"iso3c","un.region.name"))%>%
   pivot_wider(names_from = tran,values_from = value)%>%
-  mutate(ratio_inv_exp=100*P5CG/TLYCG)%>%
+  mutate(ratio_inv_exp=100*P5CG/TLYCG,
+         investment=P5CG,
+         expenditure=TLYCG)%>%
  # select(-c(P5CG,TLYCG))%>%
   filter(fun=="Total function",year>=1995)
 ```
 
-## Controls
+# Controls
 
-### Database of Political Institutions
+## Database of Political Institutions
 
 ```{r,eval=FALSE eval=FALSE, include=FALSE, r,eval=FALSE}
 data_dpi<-read_dta("Data/DPI2020.dta")%>%
-  dplyr::select(countrycode=ifs,year,system,execrlc,gov1vote,gov1rlc,gov2vote,gov2rlc,
-                gov3vote,gov3rlc,govothvt,opp1vote,opp1rlc,opp2vote,opp3vote,oppothvt,
-                legelec,exelec,liec,eiec,pluralty,pr,auton,muni,state,author,maj,herfgov,
-                herfopp,frac,oppfrac,govfrac,tensys,checks,stabs,polariz)%>%
-  #replacing -999 with NA
-  mutate(across(where(is.numeric),~as.numeric(.),.names = "{.col}"),#unfortunately is necessary for case_when but deletes labels from stata 
+  dplyr::select(countrycode=ifs,year,legelec,exelec)%>%
+
+  mutate(across(where(is.numeric),~as.numeric(.),.names = "{.col}"),
          across(where(is.numeric), ~case_when(.==-999~NA_real_,
                                        TRUE~.),.names = "{.col}"),
-         across(where(is.character),~as.character(.),.names = "{.col}"),#unfortunately is necessary for case_when but deletes labels from stata 
+         across(where(is.character),~as.character(.),.names = "{.col}"),
          across(where(is.character), ~case_when(.=="-999"~NA_character_,
                                               TRUE~.),.names = "{.col}"))%>%
   rename_with(~gsub("(.*)","control_\\1",.)%>%tolower(),-c(countrycode,year))%>%
-  select(countrycode,year,control_legelec,control_exelec,control_auton,control_state,control_govfrac,control_author)
+  select(countrycode,year,control_legelec,control_exelec)
 
 
 
-saveRDS(dpi,"dfs/dpi")
+saveRDS(data_dpi,"dfs/dpi")
 data_dpi<-readRDS("dfs/dpi")
 ```
 
-### AMECO (European Comission)
+## AMECO (European Comission)
 
 UDGGL= Debt GG (Percentage of GDP at current prices (excessive deficit procedure)) 
 UVGD= GDP current prices (Mrd ECU/EUR) AVGDGP= output gap (Percentage of potential gross domestic product at constant prices) 
@@ -222,12 +229,13 @@ data_ameco<-lapply(api_link,function(x){
 ```
 
 ```{r eval=FALSE, include=FALSE}
-data<-left_join(cofog2,frsi,by=c("countrycode","year","region"))%>%
+data<-left_join(data_cofog,frsi,by=c("countrycode","year","region"))%>%
   left_join(data_ameco,by=c("countrycode","year","countryname"="country"))%>%
   left_join(data_dpi,by=c("countrycode","year"))%>%
  # filter(year%in%1995:2021,region=="Europe")%>%
-  mutate(log_exp=log(TLYCG),
-         log_inv=log(P5CG))
+  mutate(log_exp=log(expenditure),
+         log_inv=log(investment))%>%
+  select(countrycode,countryname,3:7,log_inv,log_exp,everything(),-fun)
 
 saveRDS(data,"dfs/data")
 ```
@@ -237,25 +245,24 @@ saveRDS(data,"dfs/data")
 ```{r}
 data<-readRDS("dfs/data")
 controls<-c("control_AVGDGP","control_UDGGL","control_UVGD","control_UBLGI","control_UYIG","control_legelec","control_exelec")
-window<-c(-5,7)
+window<-c(-5,5)
+outcome_lags<-4
+nonabsorbing_lag<-5
 ```
 
 ## full
 
 ```{r}
-
-
-
 reg_full_ratio<-lpdid(data, window = window,
              y="ratio_inv_exp",
              exp_var = "frsi_national_full",
             controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
+             nonabsorbing_lag = nonabsorbing_lag)
 
 reg_full_exp<-lpdid(data, window = window,
              y="log_exp",
@@ -263,12 +270,10 @@ reg_full_exp<-lpdid(data, window = window,
               controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
-
-
+             nonabsorbing_lag = nonabsorbing_lag)
 
 reg_full_inv<-lpdid(data, window = window,
              y="log_inv",
@@ -276,28 +281,22 @@ reg_full_inv<-lpdid(data, window = window,
              controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
+             nonabsorbing_lag = nonabsorbing_lag)
 
 
-vis_reg_full_ratio<-reg_full_ratio%>%plot_lpdid()
-vis_reg_full_ratio
-ggsave("vis_reg_full_ratio.pdf", vis_reg_full_ratio, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+vis_reg_full_ratio<-reg_full_ratio%>%plot_lpdid(title = "Investment-to-expenditure ratio",ymin=-.4,ymax=.2)
+vis_reg_full_inv<-reg_full_inv%>%plot_lpdid(title = "Investment",loglin =TRUE,ymin=-.06,ymax=.02)
+vis_reg_full_exp<-reg_full_exp%>%plot_lpdid(title = "Expenditure",loglin = TRUE,ymin=-.06,ymax=.02)
 
+vis_full<-vis_reg_full_ratio/
+(vis_reg_full_inv+
+vis_reg_full_exp)
+vis_full
 
-vis_reg_full_exp<-reg_full_exp%>%plot_lpdid()
-vis_reg_full_exp
-ggsave("vis_reg_full_exp.pdf", vis_reg_full_exp, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
-
-vis_reg_full_inv<-reg_full_inv%>%plot_lpdid()
-vis_reg_full_inv
-ggsave("vis_reg_full_inv.pdf", vis_reg_full_inv, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
-
-
-
-
+save_vis(vis_full,"vis_full",path = f_graphics,height = 25,width=30)
 ```
 
 ## BBR
@@ -310,10 +309,10 @@ reg_bbr_ratio<-lpdid(data, window = window,
             controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
+             nonabsorbing_lag = nonabsorbing_lag)
 
 reg_bbr_exp<-lpdid(data, window = window,
              y="log_exp",
@@ -321,12 +320,10 @@ reg_bbr_exp<-lpdid(data, window = window,
               controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
-
-
+             nonabsorbing_lag = nonabsorbing_lag)
 
 reg_bbr_inv<-lpdid(data, window = window,
              y="log_inv",
@@ -334,25 +331,22 @@ reg_bbr_inv<-lpdid(data, window = window,
              controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
+             nonabsorbing_lag = nonabsorbing_lag)
 
 
-vis_reg_bbr_ratio<-reg_bbr_ratio%>%plot_lpdid()
-vis_reg_bbr_ratio
-ggsave("vis_reg_bbr_ratio.pdf", vis_reg_bbr_ratio, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+vis_reg_bbr_ratio<-reg_bbr_ratio%>%plot_lpdid(title = "Investment-to-expenditure ratio",ymin=-.3,ymax=.1)
+vis_reg_bbr_exp<-reg_bbr_exp%>%plot_lpdid(title = "Expenditure",loglin = TRUE,ymin=-.04,ymax=.02)
+vis_reg_bbr_inv<-reg_bbr_inv%>%plot_lpdid(title = "Investment",loglin =TRUE,ymin=-.04,ymax=.02)
 
-vis_reg_bbr_exp<-reg_bbr_exp%>%plot_lpdid()
-vis_reg_bbr_exp
-ggsave("vis_reg_bbr_exp.pdf", vis_reg_bbr_exp, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+vis_bbr<-vis_reg_bbr_ratio/
+(vis_reg_bbr_inv+
+vis_reg_bbr_exp)
+vis_bbr
 
-vis_reg_bbr_inv<-reg_bbr_inv%>%plot_lpdid()
-vis_reg_bbr_inv
-ggsave("vis_reg_bbr_inv.pdf", vis_reg_bbr_inv, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
-
-
+save_vis(vis_bbr,"vis_bbr",path = f_graphics,height = 25,width=30)
 ```
 
 ## DR
@@ -366,10 +360,10 @@ reg_dr_ratio<-lpdid(data, window = window,
             controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
+             nonabsorbing_lag = nonabsorbing_lag)
 
 reg_dr_exp<-lpdid(data, window = window,
              y="log_exp",
@@ -377,10 +371,10 @@ reg_dr_exp<-lpdid(data, window = window,
               controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
+             nonabsorbing_lag = nonabsorbing_lag)
 
 reg_dr_inv<-lpdid(data, window = window,
              y="log_inv",
@@ -388,24 +382,22 @@ reg_dr_inv<-lpdid(data, window = window,
              controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
+             nonabsorbing_lag = nonabsorbing_lag)
 
 
-vis_reg_dr_ratio<-reg_dr_ratio%>%plot_lpdid()
-vis_reg_dr_ratio
-ggsave("vis_reg_dr_ratio.pdf", vis_reg_dr_ratio, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+vis_reg_dr_ratio<-reg_dr_ratio%>%plot_lpdid(title = "Investment-to-expenditure ratio",ymin=-.4,ymax=.4)
+vis_reg_dr_exp<-reg_dr_exp%>%plot_lpdid(title = "Expenditure",loglin = TRUE,ymin=-.04,ymax=.04)
+vis_reg_dr_inv<-reg_dr_inv%>%plot_lpdid(title = "Investment",loglin =TRUE,ymin=-.04,ymax=.04)
 
-vis_reg_dr_exp<-reg_dr_exp%>%plot_lpdid()
-vis_reg_dr_exp
-ggsave("vis_reg_dr_exp.pdf", vis_reg_dr_exp, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+vis_dr<-vis_reg_dr_ratio/
+(vis_reg_dr_inv+
+vis_reg_dr_exp)
+vis_dr
 
-vis_reg_dr_inv<-reg_dr_inv%>%plot_lpdid()
-vis_reg_dr_inv
-ggsave("vis_reg_dr_inv.pdf", vis_reg_dr_inv, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
-
+save_vis(vis_dr,"vis_dr",path = f_graphics,height = 25,width=30)
 ```
 
 ## ER
@@ -419,15 +411,10 @@ reg_er_ratio<-lpdid(data, window = window,
             controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
-
-
-
-
-
+             nonabsorbing_lag = nonabsorbing_lag)
 
 reg_er_exp<-lpdid(data, window = window,
              y="log_exp",
@@ -435,12 +422,10 @@ reg_er_exp<-lpdid(data, window = window,
               controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
-
-
+             nonabsorbing_lag = nonabsorbing_lag)
 
 reg_er_inv<-lpdid(data, window = window,
              y="log_inv",
@@ -448,41 +433,269 @@ reg_er_inv<-lpdid(data, window = window,
              controls = controls,
              unit_index = "countrycode",
              time_index = "year",
-             outcome_lags = 4,
+             outcome_lags = outcome_lags,
              reweight = FALSE,
              nonabsorbing = TRUE,
-             nonabsorbing_lag = 3)
+             nonabsorbing_lag = nonabsorbing_lag)
 
+vis_reg_er_ratio<-reg_er_ratio%>%plot_lpdid(title = "Investment-to-expenditure ratio",ymin=-.2,ymax=.2)
+vis_reg_er_exp<-reg_er_exp%>%plot_lpdid(title = "Expenditure",loglin = TRUE,ymin=-.04,ymax=.04)
+vis_reg_er_inv<-reg_er_inv%>%plot_lpdid(title = "Investment",loglin =TRUE,ymin=-.04,ymax=.04)
 
-vis_reg_er_ratio<-reg_er_ratio%>%plot_lpdid()
-vis_reg_er_ratio
-ggsave("vis_reg_er_ratio.pdf", vis_reg_er_ratio, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
+vis_er<-vis_reg_er_ratio/
+(vis_reg_er_inv+
+vis_reg_er_exp)
+vis_er
 
-vis_reg_er_exp<-reg_er_exp%>%plot_lpdid()
-vis_reg_er_exp
-ggsave("vis_reg_er_exp.pdf", vis_reg_er_exp, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
-
-vis_reg_er_inv<-reg_er_inv%>%plot_lpdid()
-vis_reg_er_inv
-ggsave("vis_reg_er_inv.pdf", vis_reg_er_inv, device = "pdf", height = 15, width = 30, units = "cm", path = "Output/")
-
+save_vis(vis_er,"vis_er",path = f_graphics,height = 25,width=30)
 ```
 
-# Archiv
+# Visualisations
+## investment-to-expenditure ratio
+```{r}
+data_depvar<-cofog2%>%
+  mutate(year_group=case_when(year<2000~"1995-1999",
+                              year<2005~"2000-2004",
+                              year<2010~"2005-2009",
+                              year<2015~"2010-2014",
+                              TRUE~"2016-2021"))
+  
 
-## Dependent var alternative
+
+ vis_invexp_ratio<- data_depvar%>%
+    ggplot(aes(x=year_group,y=ratio_inv_exp))+
+       ggbeeswarm::geom_quasirandom(shape = 21,size=2, dodge.width = .75,width=0.35,show.legend = T,varwidth = T,color="#ee6174",fill="#ee6174")+
+    geom_point(aes(y=mean),data=data_depvar%>%group_by(year_group)%>%summarise(mean=mean(ratio_inv_exp,na.rm = T)),size=3)+
+  labs(x=NULL,y=NULL,fill=NULL,color=NULL)+
+  scale_y_continuous(limits = c(0,30))+
+  theme_tufte(base_family = "lmroman",base_size = 20)+
+  theme(axis.text.x = element_text(angle = 90),
+        axis.text.y = element_text(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.spacing = unit(0,"lines"),legend.position="none")
+
+ggsave("vis_invexp_ratio.pdf", vis_invexp_ratio, device = "pdf", height = 15, width = 30, 
+    units = "cm", path = f_graphics)
+
+data_depvar%>%group_by(year_group)%>%summarise(mean=mean(ratio_inv_exp,na.rm = T))
+```
+
+## frsi
+```{r}
+data_trend<-frsi%>%
+  #filter(region=="Europe")%>%
+  mutate(frsi_national_full2=case_when(frsi_national_full==0~NA_real_,
+                                 TRUE~frsi_national_full
+                                 ))%>%
+  group_by(year)%>%
+  summarise(
+    number_fiscalrules=sum(frsi_national_full!=0),
+    frsi_national_full=mean(frsi_national_full2,na.rm=T))
+
+
+vis1<-data_trend%>%
+  ggplot(aes(x=year))+
+  geom_col(aes(y=number_fiscalrules),fill="#51275f",color="#51275f",width = 0.6)+
+  #geom_line(aes(y=frsi_national_full*10),size=2,color="#ee6174")+
+  scale_x_continuous(expand = c(0,0),breaks = 1985+0:7*5)+
+  scale_y_continuous(limits = c(0,100))+
+  labs(title="Number of fiscal rules",x=NULL,y=NULL)+
+  theme_tufte(base_size = 20,base_family = "lmroman")+
+  theme(axis.text.x = element_text(angle = 90),
+        axis.text.y = element_text(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        axis.ticks = element_blank(),
+        axis.line.y = element_blank(),
+        axis.line.x = element_blank(),
+        panel.spacing = unit(0,"lines"))
+
+vis2<-data_trend%>%
+  ggplot(aes(x=year))+
+ # geom_col(aes(y=number_fiscalrules),fill="#51275f",color="#51275f",width = 0.8)+
+  geom_col(aes(y=frsi_national_full),color="#ee6174",fill="#ee6174",width = 0.6)+
+  scale_x_continuous(expand = c(0,0),breaks = 1985+0:7*5)+
+  scale_y_continuous(limits = c(0,10))+
+  labs(title="Fiscal rules index",x=NULL,y=NULL)+
+  theme_tufte(base_size = 20,base_family = "lmroman")+
+  theme(axis.text.x = element_text(angle = 90),
+        axis.text.y = element_text(),
+        panel.grid.major.y = element_line(linetype = "dotted"),
+        axis.ticks = element_blank(),
+        axis.line.y = element_blank(),
+        axis.line.x = element_blank(),
+        panel.spacing = unit(0,"lines"))
+
+frsi_trend<-vis1+vis2
+frsi_trend
+
+ggsave("frsi_trend.pdf", frsi_trend, device = "pdf", height = 15, width = 30,
+    units = "cm", path =f_graphics)
+```
+
+# Tables
+```{r}
+data05<-data%>%
+  dplyr::filter(year%in%c(1995,2000,2005,2010,2015,2016,2017))
+
+
+
+
+id_vars<-c("countrycode","countryname","year","region")
+controls<-data%>%select(matches("control_"))%>%names()
+
+data_used<-data%>%
+  select(all_of(id_vars),ratio_inv_exp,investment,expenditure,log_inv,log_exp,matches("^frsi"),all_of(controls))
+data_used05<-data05%>%
+  select(all_of(id_vars),ratio_inv_exp,log_inv,log_exp,investment,expenditure,matches("^frsi"),matches("^frsi"),all_of(controls))
+
+
+data_explanatory<-data%>%
+  select(year,matches("^frsi"))
+data_explanatory05<-data05%>%
+  select(year,matches("^frsi"))
+
+
+data_dependent<-data%>%
+  select(year,ratio_inv_exp,investment,expenditure,log_inv,log_exp)
+data_dependent05<-data05%>%
+  select(year,ratio_inv_exp,investment,expenditure,log_inv,log_exp)
+
+
+data_controls<-data%>%
+  select(year,all_of(controls))
+data_controls05<-data05%>%
+  select(year,all_of(controls))
+
+data_list<-list("Explanatory Variables"=data_explanatory,"Dependent Variables"=data_dependent,"Control Variables"=data_controls)
+
+data_list05<-list("Explanatory Variables"=data_explanatory05,"Dependent Variables"=data_dependent05,"Control Variables"=data_controls05)
+```
 
 ```{r}
-data_cofog<-rdb("Eurostat","gov_10a_exp",mask = "A...GF01.P51G+TE.")%>%
-  select(countrycode=geo,country=`Geopolitical entity (reporting)`,year=original_period,sector,indicator=na_item,unit,value)%>%
-  filter(!countrycode%in%c("EA19", "EA20", "EU27_2020"))%>%
-  mutate(indicator=case_when(indicator=="TE"~"expenditure",
-                             TRUE~"investment"),
-         year=as.numeric(year),countrycode=countrycode(countrycode,origin="eurostat",destination="iso3c"),
-         unit=str_replace_all(unit, "_", "") %>% 
-                           str_to_lower())%>%
-  pivot_wider(c(countrycode,country,year),names_from = c(indicator,sector,unit),names_prefix = "depvar_", values_from = value)
+myDescriptives <- function(x) {
+    x = as.numeric(x)
+    m = mean(x, na.rm = TRUE)
+    md = median(x, na.rm = TRUE)
+    sd = sd(x, na.rm = TRUE)
+    x25 = quantile(x,probs=0.25,na.rm=TRUE)
+    x75 = quantile(x,probs=0.75,na.rm=TRUE)
+    IQR = IQR(x,na.rm = TRUE)
+    
+  return(c(m, md, sd,x25,x75,IQR))
+}
 
-saveRDS(data_cofog,"dfs/cofog")
-data_cofog<-readRDS("dfs/cofog")
+myDescriptives_group <- function(x) {
+    x = as.numeric(x)
+    m = mean(x, na.rm = TRUE)
+    md = median(x, na.rm = TRUE)
+    sd = sd(x, na.rm = TRUE)
+    
+  return(c(m,sd))
+}
+```
+
+```{r}
+#https://cran.r-project.org/web/packages/reporttools/vignettes/reporttools.pdf
+#https://sdaza.com/blog/2020/descriptive-tables/
+#describe(data_controls%>%select(-all_of(id_vars)))
+expl_vars<-c("frsi_national_full","frsi_national_bbr","frsi_national_dr","frsi_national_er")
+expl_labels<-c("frsi-national-full","frsi-national-bbr","frsi-national-dr","frsi-national-er")
+
+dep_vars<-c("ratio_inv_exp","log_inv","log_exp")
+
+dep_labels<-c("ratio-inv-exp","log-inv","log-exp")
+
+control_labels<-c("UDGGL","UVGD","AVGDGP","UYIG","UBLGI","legelec","exelec")
+
+
+variables = list(expl_vars, dep_vars, controls)
+labels = list(expl_labels, dep_labels, control_labels)
+colnames =  c("Mean", "Median", "SD","$Q_1$","$Q_3$","IQR")
+colnames_grouped =  c("Mean", "SD")
+path<-"C:/Users/leona/Dropbox/Apps/Overleaf/Fiscal Rules Budget Composition/Tables/"
+
+createDescriptiveTable(datasets = data_list,
+    summary_function = myDescriptives,
+    column_names = colnames,
+    variable_names = variables,
+    variable_labels = labels,
+    arraystretch = 1.3,
+    title = "Descriptive statistics",
+    label = "tab:descriptive",
+    file = paste0(path,"/descriptive1.tex"))
+
+createDescriptiveTable(data_list05,
+    summary_function = myDescriptives_group,
+    column_names = colnames_grouped,
+    variable_names = variables,
+    group_variable = "year",
+    variable_labels = labels,
+    arraystretch = 1.3,
+    title = "Descriptive statistics",
+    label = "tab:descriptive",
+    file = paste0(path,"/descriptive_grouped.tex"),
+    fontsize = "\\fontsize{7pt}{8pt}\\selectfont")
+```
+
+
+
+# Quick numbers
+```{r}
+
+data%>%
+  group_by(year)%>%
+  summarise(
+    number_fiscalrules=sum(frsi_national_bbr!=0,na.rm = T))%>%
+  filter(year==1995|
+         year==2021)
+
+data%>%
+  group_by(year)%>%
+  summarise(
+    number_fiscalrules=sum(frsi_national_dr!=0,na.rm = T))%>%
+  filter(year==1995|
+         year==2021)
+
+data%>%
+  group_by(year)%>%
+  summarise(
+    number_fiscalrules=sum(frsi_national_er!=0,na.rm = T))%>%
+  filter(year==1995|
+         year==2021)
+
+frsi%>%
+  group_by(year)%>%
+  summarise(
+    number_fiscalrules=sum(frsi_national_rr!=0))%>%
+  filter(year==1995|
+         year==2021)
+```
+
+```{r}
+data$frsi_national_full%>%sd(na.rm = T)
+
+data$ratio_inv_exp%>%mean(na.rm = T)
+
+frsi$countrycode%>%unique()%>%length()
+```
+
+```{r}
+reg_full_ratio$coeftable$Estimate
+reg_full_inv$coeftable$Estimate*100
+reg_full_exp$coeftable$Estimate*100
+
+reg_bbr_ratio$coeftable$Estimate
+reg_bbr_inv$coeftable$Estimate*100
+reg_bbr_exp$coeftable$Estimate*100
+
+reg_dr_ratio$coeftable$Estimate
+reg_dr_inv$coeftable$Estimate*100
+reg_dr_exp$coeftable$Estimate*100
+
+reg_er_ratio$coeftable$Estimate
+reg_er_inv$coeftable$Estimate
+reg_er_exp$coeftable$Estimate
+
 ```
